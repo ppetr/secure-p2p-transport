@@ -1,0 +1,15 @@
+[package]
+name = "secure-p2p-transport"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[dependencies]
+async-std = { version = "1.12", features = ["attributes"] }
+async-trait = "0.1"
+env_logger = "0.10.0"
+futures = "0.3.28"
+# For TCP transport add below: "tcp", "dns", "websocket", "noise", "yamux"
+libp2p = { git = "https://github.com/libp2p/rust-libp2p", branch = "master", version = "0.52.1", default-features = false, features = ["async-std", "gossipsub", "kad", "macros" ] }
+libp2p-quic = { git = "https://github.com/libp2p/rust-libp2p", branch = "master", version = "0.9.2-alpha", default-features = false, features = ["async-std"]  }
