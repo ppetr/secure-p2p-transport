@@ -37,7 +37,8 @@ use async_std::io;
 use futures::{prelude::*, select};
 use libp2p::{
     core::muxing::StreamMuxerBox,
-    gossipsub, identity,
+    core::transport::OrTransport,
+    development_transport, gossipsub, identify, identity,
     kad::{
         record::store::MemoryStore, GetProvidersOk, Kademlia, KademliaConfig, KademliaEvent,
         QueryResult, RecordKey,
@@ -72,11 +73,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         RecordKey::new(&"12D3KooWD3mFq2ijumTBcnuG5jQh3qC7ChjLNwf5WaPjh3aAWJr9".as_bytes());
 
     let quic_transport = quic::async_std::Transport::new(quic::Config::new(&local_peer));
-    let transport = quic_transport
-        .map(|output, _| match output {
-            (peer_id, muxer) => (peer_id, StreamMuxerBox::new(muxer)),
-        })
-        .boxed();
+    let transport = OrTransport::new(
+        development_transport(local_peer.clone()).await?,
+        quic_transport,
+    )
+    .map(|output, _| match output {
+        Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+        Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+    })
+    .boxed();
 
     // To content-address message, we can take the hash of message and use it as an ID.
     let message_id_fn = |message: &gossipsub::Message| {
