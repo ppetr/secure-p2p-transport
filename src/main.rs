@@ -34,14 +34,14 @@
 // https://docs.rs/libp2p-kad/latest/libp2p_kad/
 
 use async_std::io;
-use futures::{prelude::*, select};
+use futures::{future::Either, prelude::*, select};
 use libp2p::{
     core::muxing::StreamMuxerBox,
     core::transport::OrTransport,
     development_transport, gossipsub, identify, identity,
     kad::{
-        record::store::MemoryStore, GetProvidersOk, Kademlia, KademliaConfig, KademliaEvent,
-        QueryResult, RecordKey,
+        record::store::MemoryStore, GetClosestPeersOk, GetProvidersOk, Kademlia, KademliaConfig,
+        KademliaEvent, QueryResult, RecordKey,
     },
     swarm::NetworkBehaviour,
     swarm::{SwarmBuilder, SwarmEvent},
@@ -57,6 +57,7 @@ use std::time::Duration;
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
+    identify: identify::Behaviour,
     kademlia: Kademlia<MemoryStore>,
 }
 
@@ -100,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // build a gossipsub network behaviour
     let mut gossipsub = gossipsub::Behaviour::new(
-        gossipsub::MessageAuthenticity::Signed(local_peer),
+        gossipsub::MessageAuthenticity::Signed(local_peer.clone()),
         gossipsub_config,
     )
     .expect("Correct configuration");
@@ -108,6 +109,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let topic = gossipsub::IdentTopic::new("test-net");
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
+
+    let identify = identify::Behaviour::new(identify::Config::new(
+        PROTO_VERSION.to_string(),
+        local_peer.public(),
+    ));
 
     // Create a Kademlia behaviour.
     let mut kademlia = Kademlia::with_config(
@@ -123,6 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut swarm = {
         let behaviour = MyBehaviour {
             gossipsub,
+            identify,
             kademlia,
         };
         SwarmBuilder::with_async_std_executor(transport, behaviour, local_peer_id).build()
@@ -141,66 +148,78 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let kademlia = &mut swarm.behaviour_mut().kademlia;
     kademlia.start_providing(shared_dht_key.clone())?;
     kademlia.get_providers(shared_dht_key.clone());
+    // kademlia.get_closest_peers(local_peer_id);
     loop {
         select! {
             line = stdin.select_next_some() => {
                 if let Err(e) = swarm
                     .behaviour_mut().gossipsub
                         .publish(topic.clone(), line.expect("Stdin not to close").as_bytes()) {
-                            println!("Publish error: {e:?}");
-                            // Let's try to fetch providers again.
+                            println!("Retrying start/get_providers on publish error: {e:?}");
+                            swarm.behaviour_mut().kademlia.start_providing(shared_dht_key.clone())?;
                             swarm.behaviour_mut().kademlia.get_providers(shared_dht_key.clone());
                 }
             },
             event = swarm.select_next_some() => match event {
-                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(kademlia_event)) =>
-                    match kademlia_event {
-                        KademliaEvent::OutboundQueryProgressed {
-                            result: QueryResult::Bootstrap(result),
-                            ..
-                        } => {
-                            result?;
-                            panic!("Unexpected bootstrap");
+                SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received{peer_id, info: identify::Info{protocol_version, listen_addrs: _, protocols, observed_addr, ..}})) => {
+                    for protocol in protocols {
+                        if protocol == KADEMLIA_PROTOCOL {
+                            println!("Adding an Kademlia peer: {peer_id} at address {observed_addr}");
+                            // swarm.behaviour_mut().kademlia.add_address(&peer_id, observed_addr.clone());
+                        } else if protocol == PROTO_VERSION {
+                            println!("Adding our {PROTO_VERSION} peer: {peer_id} at address {observed_addr}");
+                            Swarm::dial(&mut swarm, peer_id)?;
                         }
-                        KademliaEvent::OutboundQueryProgressed {
-                            result: QueryResult::GetProviders(Ok(GetProvidersOk::FoundProviders{ providers, .. })),
-                            ..
-                        } => {
-                            for peer_id in providers {
-                                if peer_id != local_peer_id && !Swarm::is_connected(&swarm, &peer_id) {
-                                    println!("Kademlia discovered a new peer: {peer_id}");
-                                    // TODO: Kademlia might not be caching the address of the peer.
-                                    Swarm::dial(&mut swarm, peer_id)?;
-                                    swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                                }
-                            }
-                        },
-                        KademliaEvent::OutboundQueryProgressed {
-                            result: QueryResult::GetProviders(Ok(GetProvidersOk::FinishedWithNoAdditionalRecord{ closest_peers })),
-                            ..
-                        } => {
-                            println!("Finished getting providers, waiting for other peers to connect; closest peers: {closest_peers:?}");
-                        },
-                        KademliaEvent::OutboundQueryProgressed {
-                            result: QueryResult::StartProviding(add_provider),
-                            ..
-                        } => {
-                            add_provider?;
-                            println!("Published this node as a provider for key");
-                        },
-                            ev => {
-                                println!("Other Kademlia event: {ev:?}");
-                            },
-                    },
-                    SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                        propagation_source: peer_id,
-                        message_id: id,
-                        message,
-                    })) => println!("Got message: '{}' with id: {id} from peer: {peer_id}", String::from_utf8_lossy(&message.data)),
-                    SwarmEvent::NewListenAddr { address, .. } => {
-                        println!("Local node is listening on {address}");
                     }
-                _ => {}
+                },
+                SwarmEvent::Behaviour(MyBehaviourEvent::Kademlia(kademlia_event)) =>
+                match kademlia_event {
+                    KademliaEvent::OutboundQueryProgressed {
+                        result: QueryResult::Bootstrap(result),
+                        ..
+                    } => {
+                        result?;
+                        panic!("Unexpected bootstrap");
+                    },
+                    KademliaEvent::OutboundQueryProgressed {
+                        result: QueryResult::GetProviders(Ok(GetProvidersOk::FoundProviders{ providers, .. })),
+                        ..
+                    } => {
+                        for peer_id in providers {
+                            if peer_id != local_peer_id  {
+                                println!("Kademlia discovered a new peer provider: {peer_id}");
+                                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                            }
+                        }
+                    },
+                    KademliaEvent::OutboundQueryProgressed {
+                        result: QueryResult::GetProviders(Ok(GetProvidersOk::FinishedWithNoAdditionalRecord{ closest_peers })),
+                        ..
+                    } => {
+                        println!("Finished getting providers, waiting for other peers to connect; closest peers: {closest_peers:?}");
+                    },
+                    KademliaEvent::OutboundQueryProgressed {
+                        result: QueryResult::StartProviding(add_provider),
+                        ..
+                    } => {
+                        add_provider?;
+                        println!("Published this node as a provider for key");
+                    },
+                    ev => {
+                        // println!("Other Kademlia event: {ev:?}");
+                    },
+                },
+                SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                    propagation_source: peer_id,
+                    message_id: id,
+                    message,
+                })) => println!("Got message: '{}' with id: {id} from peer: {peer_id}", String::from_utf8_lossy(&message.data)),
+                SwarmEvent::NewListenAddr { address, .. } => {
+                    println!("Local node is listening on {address}");
+                }
+                ev => {
+                    // println!("Other event: {ev:?}");
+                },
             }
         }
     }
@@ -216,3 +235,6 @@ const BOOTNODES: [&str; 4] = [
     "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
     "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
 ];
+
+const KADEMLIA_PROTOCOL: &str = "/ipfs/kad/1.0.0";
+const PROTO_VERSION: &str = "/secure-p2p-transport/0.1";
