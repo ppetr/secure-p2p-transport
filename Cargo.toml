@@ -1,15 +1,13 @@
 [package]
 name = "secure-p2p-transport"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
-license = "MIT"
+license = "Apache 2.0"
 
 [dependencies]
-async-std = { version = "1.12", features = ["attributes"] }
-async-trait = "0.1"
-env_logger = "0.10.0"
-futures = "0.3.28"
-# For development_transport add below: "tcp", "dns", "websocket", "noise", "yamux"
-libp2p = { git = "https://github.com/libp2p/rust-libp2p", branch = "master", version = "0.52.1", default-features = false, features = ["async-std", "dns", "identify", "gossipsub", "kad", "macros", "tcp", "rsa",  "websocket", "noise", "yamux" ] }
-libp2p-quic = { git = "https://github.com/libp2p/rust-libp2p", branch = "master", version = "0.9.2-alpha", default-features = false, features = ["async-std"]  }
+iroh = { version = "0.29", features = ["discovery-local-network", "discovery-pkarr-dht"] }
+tokio = { version = "1.36", features = ["full"] }
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
