@@ -1,4 +1,4 @@
-use iroh::key::{PublicKey, SecretKey};
+use iroh::{PublicKey, SecretKey};
 use std::io;
 use std::path::Path;
 use std::str::FromStr;
@@ -49,14 +49,12 @@ mod tests {
     #[test]
     fn test_key_persistence() {
         let secret = SecretKey::generate();
-        let public = secret.public();
         let file_path = Path::new("test_key.bin");
 
         save_key_to_disk(&file_path, &secret).expect("Failed to save key");
         let loaded_secret = load_key_from_disk(&file_path).expect("Failed to load key");
-        let loaded_public = loaded_secret.public();
-
-        assert_eq!(public, loaded_public);
+        assert_eq!(secret.to_bytes(), loaded_secret.to_bytes());
+        assert_eq!(secret.public(), loaded_secret.public());
 
         // Cleanup
         std::fs::remove_file(file_path).expect("Failed to remove temp key file");

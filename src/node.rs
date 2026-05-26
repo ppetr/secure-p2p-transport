@@ -1,13 +1,15 @@
 use anyhow::Result;
 use iroh::{
-    discovery::{
-        ConcurrentDiscovery,
-        pkarr::dht::DhtDiscovery,
-        local_swarm_discovery::LocalSwarmDiscovery,
+    Endpoint,
+    EndpointAddr,
+    PublicKey,
+    SecretKey,
+    endpoint::{Connection, presets},
+    // Use the explicit address lookup types matching version 0.98.2
+    address_lookup::{
+        mdns::MdnsAddressLookup,
+        pkarr::dht::DhtAddressLookup,
     },
-    endpoint::{Connection, Endpoint},
-    key::{PublicKey, SecretKey},
-    NodeAddr,
 };
 use tokio::sync::mpsc;
 
@@ -31,73 +33,85 @@ pub struct TransportNode {
 impl TransportNode {
     /// Initializes the endpoint, applies the identity key, and activates fully decentralized discovery.
     pub async fn new(options: TransportNodeOptions) -> Result<Self> {
+        // Instantiate both lookup mechanisms as requested via their respective builders
+        let dht_lookup = DhtAddressLookup::builder().build()?;  // TODO: BROKEN
+        let mdns_lookup = MdnsAddressLookup::builder().build(options.secret_key.public())?;
+
         let alpn = options.alpn.clone();
-
-        // Combine both discovery engines into a concurrent tracking router
-        let mut combined_discovery = ConcurrentDiscovery::empty();
-        combined_discovery.add(DhtDiscovery::builder().build()?);
-        combined_discovery.add(LocalSwarmDiscovery::new(options.secret_key.public())?);
-
-        let endpoint = Endpoint::builder()
+        // Attach both directly to the Endpoint builder configuration pipeline
+        let endpoint = Endpoint::builder(presets::Minimal)
             .secret_key(options.secret_key)
-            .alpns(vec![options.alpn])
-            .discovery(Box::new(combined_discovery))
+            .address_lookup(dht_lookup)
+            .address_lookup(mdns_lookup)
+            .alpns(vec![alpn.clone()])
             .bind()
             .await?;
 
         Ok(Self { endpoint, alpn })
     }
 
-    /// Returns the public key (Node ID) of this transport node.
+    /// Exposes the node's unique public identity.
     pub fn public_key(&self) -> PublicKey {
-        self.endpoint.node_id()
+        self.endpoint.secret_key().public()
     }
 
-    /// Connects to a remote peer using only their public key.
-    /// Address resolution via Mainline DHT and mDNS is handled automatically.
+    /// Extracts the remote peer's public key (Endpoint ID) from an established Iroh connection.
+    pub fn get_remote_public_key(connection: &Connection) -> PublicKey {
+        connection.remote_id()
+    }
+
+    /// Asynchronously establishes a connection to a remote peer using only their public key.
     pub async fn connect(&self, peer_id: PublicKey) -> Result<Connection> {
-        let node_addr = NodeAddr::from(peer_id);
-        let connection = self.endpoint.connect(node_addr, &self.alpn).await?;
+        let endpoint_addr = EndpointAddr::from(peer_id);
+        let connection = self.endpoint.connect(endpoint_addr, &self.alpn).await?;
         Ok(connection)
     }
 
-    /// Starts a background loop to listen for incoming connections.
-    /// Established connections are sent to the returned mpsc receiver channel.
-    pub fn listen(&self) -> mpsc::Receiver<Connection> {
-        // Create a bounded channel for established connections
-        let (tx, rx) = mpsc::channel::<Connection>(32);
+    /// Spawns an internal background task accepting incoming connections.
+    /// Provides an optional stateless function pointer to filter connections based on the remote peer's public key.
+    pub fn listen(&self, filter: Option<fn(PublicKey) -> bool>) -> mpsc::Receiver<Connection> {
         let endpoint = self.endpoint.clone();
+        let (tx, rx) = mpsc::channel(32);
 
         tokio::spawn(async move {
-            tracing::info!("Starting TransportNode connection accept loop");
+            while let Some(connecting) = endpoint.accept().await {
+                let tx = tx.clone();
 
-            while !tx.is_closed() {
-                match endpoint.accept().await {
-                    Some(connecting) => {
-                        let tx = tx.clone();
-                        
-                        tokio::spawn(async move {
-                            match connecting.await {
-                                Ok(connection) => {
-                                    if let Err(_) = tx.send(connection).await {
-                                        tracing::debug!("Receiver channel dropped; incoming connection discarded");
-                                    }
-                                }
-                                Err(err) => {
-                                    tracing::error!("Error completing QUIC handshake: {:?}", err);
+                tokio::spawn(async move {
+                    match connecting.await {
+                        Ok(connection) => {
+                            if let Some(f) = filter {
+                                let remote_id = connection.remote_id();
+                                if !f(remote_id) {
+                                    tracing::info!("Connection from peer {} rejected by ALPN filter", remote_id);
+                                    let _ = connection.close(0u32.into(), b"Rejected by peer ALPN filter");
+                                    return;
                                 }
                             }
-                        });
+
+                            match tx.reserve().await {
+                                Ok(permit) => permit.send(connection),
+                                Err(e) => {
+                                    tracing::debug!("Receiver channel dropped; incoming connection discarded: {}", e);
+                                    let _ = connection.close(0u32.into(), b"Not accepting new connections any more");
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            tracing::warn!("Error completing QUIC handshake: {:?}", err);
+                        }
                     }
-                    None => {
-                        tracing::info!("Endpoint closed; terminating accept loop");
-                        break;
-                    }
-                }
+                });
             }
+            tracing::info!("Endpoint closed; terminating accept loop");
         });
 
         rx
+    }
+
+    /// Gracefully closes the underlying endpoint link.
+    pub async fn close(self) {
+        self.endpoint.close().await;
     }
 }
 
@@ -114,8 +128,9 @@ mod tests {
         };
 
         let node = TransportNode::new(options).await.expect("Failed to create node");
-        let connection_rx = node.listen();
+        let connection_rx = node.listen(None);
 
         assert!(!connection_rx.is_closed());
+        node.close().await;
     }
 }
