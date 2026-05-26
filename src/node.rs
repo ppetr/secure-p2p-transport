@@ -1,7 +1,13 @@
 use anyhow::Result;
 use iroh::{
+    discovery::{
+        ConcurrentDiscovery,
+        pkarr::dht::DhtDiscovery,
+        local_swarm_discovery::LocalSwarmDiscovery,
+    },
     endpoint::{Connection, Endpoint},
-    key::SecretKey,
+    key::{PublicKey, SecretKey},
+    NodeAddr,
 };
 use tokio::sync::mpsc;
 
@@ -21,24 +27,29 @@ pub struct TransportNode {
 }
 
 impl TransportNode {
-    /// Initializes the endpoint, applies the identity key, and activates Pkarr discovery.
+    /// Initializes the endpoint, applies the identity key, and activates fully decentralized discovery.
     pub async fn new(options: TransportNodeOptions) -> Result<Self> {
+        let alpn = options.alpn.clone();
+
+        // 3. Combine both engines into a concurrent tracking router
+        let mut combined_discovery = ConcurrentDiscovery::empty();
+        combined_discovery.add(DhtDiscovery::builder().build()?);
+        combined_discovery.add(LocalSwarmDiscovery::new(options.secret_key.public())?);
+        let combined_discovery = combined_discovery;
+
+        // 4. Build the endpoint cleanly without the cloud n0 DNS infrastructure
         let endpoint = Endpoint::builder()
-            // 1. Assign the secret key for cryptographic identity
             .secret_key(options.secret_key)
-            // 2. Configure the ALPN protocol identifier
             .alpns(vec![options.alpn])
-            // 3. Enable standard discovery (registers Pkarr publisher/resolver + Mainline DHT)
-            .discovery_n0()
-            // 4. Bind to [::]:0 and 0.0.0.0:0 (random local ports)
+            .discovery(Box::new(combined_discovery))
             .bind()
             .await?;
 
-        Ok(Self { endpoint })
+        Ok(Self { endpoint, alpn })
     }
 
     /// Returns the public key (Node ID) of this transport node.
-    pub fn public_key(&self) -> iroh::key::PublicKey {
+    pub fn public_key(&self) -> PublicKey {
         self.endpoint.node_id()
     }
 
