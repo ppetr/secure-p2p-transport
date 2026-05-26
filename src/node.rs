@@ -24,6 +24,8 @@ pub struct TransportNodeOptions {
 pub struct TransportNode {
     // The underlying asynchronous iroh endpoint.
     endpoint: Endpoint,
+    // Cached ALPN identifier used for initiating connections.
+    alpn: Vec<u8>,
 }
 
 impl TransportNode {
@@ -31,13 +33,11 @@ impl TransportNode {
     pub async fn new(options: TransportNodeOptions) -> Result<Self> {
         let alpn = options.alpn.clone();
 
-        // 3. Combine both engines into a concurrent tracking router
+        // Combine both discovery engines into a concurrent tracking router
         let mut combined_discovery = ConcurrentDiscovery::empty();
         combined_discovery.add(DhtDiscovery::builder().build()?);
         combined_discovery.add(LocalSwarmDiscovery::new(options.secret_key.public())?);
-        let combined_discovery = combined_discovery;
 
-        // 4. Build the endpoint cleanly without the cloud n0 DNS infrastructure
         let endpoint = Endpoint::builder()
             .secret_key(options.secret_key)
             .alpns(vec![options.alpn])
@@ -53,6 +53,14 @@ impl TransportNode {
         self.endpoint.node_id()
     }
 
+    /// Connects to a remote peer using only their public key.
+    /// Address resolution via Mainline DHT and mDNS is handled automatically.
+    pub async fn connect(&self, peer_id: PublicKey) -> Result<Connection> {
+        let node_addr = NodeAddr::from(peer_id);
+        let connection = self.endpoint.connect(node_addr, &self.alpn).await?;
+        Ok(connection)
+    }
+
     /// Starts a background loop to listen for incoming connections.
     /// Established connections are sent to the returned mpsc receiver channel.
     pub fn listen(&self) -> mpsc::Receiver<Connection> {
@@ -64,17 +72,13 @@ impl TransportNode {
             tracing::info!("Starting TransportNode connection accept loop");
 
             while !tx.is_closed() {
-                // Fetch incoming connection attempts from the endpoint
                 match endpoint.accept().await {
                     Some(connecting) => {
                         let tx = tx.clone();
                         
-                        // Spawn a separate task for the QUIC handshake to avoid blocking 
-                        // the main accept loop for other incoming connections
                         tokio::spawn(async move {
                             match connecting.await {
                                 Ok(connection) => {
-                                    // Successfully established connection; send to receiver channel
                                     if let Err(_) = tx.send(connection).await {
                                         tracing::debug!("Receiver channel dropped; incoming connection discarded");
                                     }
@@ -112,7 +116,6 @@ mod tests {
         let node = TransportNode::new(options).await.expect("Failed to create node");
         let connection_rx = node.listen();
 
-        // The channel should be open and waiting for connections
         assert!(!connection_rx.is_closed());
     }
 }
