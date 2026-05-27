@@ -13,13 +13,32 @@ use iroh::{
 };
 use tokio::sync::mpsc;
 
+/// See https://docs.rs/iroh/latest/iroh/endpoint/presets/index.html and
+/// https://docs.iroh.computer/concepts/discovery.
+#[derive(Default)]
+pub enum N0Discovery {
+    #[default] Full,  // Use the n0.computer relay.
+    DisableRelay,    // Use the n0.computer only for discovery.
+    NoN0,             // Rely on mDNS and/or DHT (which must be enabled in NodeExtraConfig).
+}
+
+
 /// Configuration options for initializing a TransportNode.
-pub struct TransportNodeOptions {
-    /// The cryptographic identity of the node.
-    pub secret_key: SecretKey,
-    /// Application-Layer Protocol Negotiation (ALPN) byte string 
-    /// (e.g., b"secure-p2p-transport/0.1").
-    pub alpn: Vec<u8>,
+/// See https://docs.iroh.computer/concepts/discovery.
+pub struct NodeExtraConfig {
+    pub n0_discovery: N0Discovery,
+    pub use_mdns: bool,
+    pub use_dht: bool,
+}
+
+impl Default for NodeExtraConfig {
+    fn default() -> NodeExtraConfig {
+        NodeExtraConfig {
+            n0_discovery: Default::default(),
+            use_mdns: true,
+            use_dht: true,
+        }
+    }
 }
 
 /// The primary node for secure P2P transport, abstracting NAT traversal and address resolution.
@@ -32,22 +51,29 @@ pub struct TransportNode {
 
 impl TransportNode {
     /// Initializes the endpoint, applies the identity key, and activates fully decentralized discovery.
-    pub async fn new(options: TransportNodeOptions) -> Result<Self> {
-        // Instantiate both lookup mechanisms as requested via their respective builders
-        let dht_lookup = DhtAddressLookup::builder().build()?;  // TODO: BROKEN
-        let mdns_lookup = MdnsAddressLookup::builder().build(options.secret_key.public())?;
+    ///
+    /// secret_key: The cryptographic identity of the node.
+    /// alpn: Application-Layer Protocol Negotiation (ALPN) byte string (e.g.,
+    ///   b"secure-p2p-transport/0.1").
+    pub async fn new(secret_key: SecretKey, alpn: Vec<u8>, options: &NodeExtraConfig) -> Result<Self> {
+        let builder = match options.n0_discovery {
+            N0Discovery::Full => iroh::endpoint::Builder::new(presets::N0),
+            N0Discovery::DisableRelay => iroh::endpoint::Builder::new(presets::N0DisableRelay),
+            N0Discovery::NoN0 => iroh::endpoint::Builder::new(presets::Minimal),
+        }.secret_key(secret_key.clone())
+         .alpns(vec![alpn.clone()]);
+        let builder = if options.use_dht {
+            builder.address_lookup(DhtAddressLookup::builder().build()?)
+        } else {
+            builder
+        };
+        let builder = if options.use_mdns {
+            builder.address_lookup(MdnsAddressLookup::builder().build(secret_key.public())?)
+        } else {
+            builder
+        };
 
-        let alpn = options.alpn.clone();
-        // Attach both directly to the Endpoint builder configuration pipeline
-        let endpoint = Endpoint::builder(presets::Minimal)
-            .secret_key(options.secret_key)
-            .address_lookup(dht_lookup)
-            .address_lookup(mdns_lookup)
-            .alpns(vec![alpn.clone()])
-            .bind()
-            .await?;
-
-        Ok(Self { endpoint, alpn })
+        Ok(Self { endpoint: builder.bind().await?, alpn: alpn })
     }
 
     /// Exposes the node's unique public identity.
@@ -65,6 +91,15 @@ impl TransportNode {
         let endpoint_addr = EndpointAddr::from(peer_id);
         let connection = self.endpoint.connect(endpoint_addr, &self.alpn).await?;
         Ok(connection)
+    }
+
+    /// Gracefully closes the underlying endpoint link.
+    pub async fn close(self) {
+        self.endpoint.close().await;
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.endpoint.is_closed()
     }
 
     /// Spawns an internal background task accepting incoming connections.
@@ -108,11 +143,6 @@ impl TransportNode {
 
         rx
     }
-
-    /// Gracefully closes the underlying endpoint link.
-    pub async fn close(self) {
-        self.endpoint.close().await;
-    }
 }
 
 #[cfg(test)]
@@ -122,12 +152,11 @@ mod tests {
     #[tokio::test]
     async fn test_new_and_listen_lifecycle() {
         let secret_key = SecretKey::generate();
-        let options = TransportNodeOptions {
-            secret_key,
-            alpn: b"secure-p2p-transport/test/0.1".to_vec(),
-        };
-
-        let node = TransportNode::new(options).await.expect("Failed to create node");
+        let node = TransportNode::new(secret_key, b"secure-p2p-transport/test/0.1".to_vec(), &NodeExtraConfig {
+            n0_discovery: N0Discovery::NoN0,
+            use_dht: false,
+            use_mdns: true,
+          }).await.expect("Failed to create node");
         let connection_rx = node.listen(None);
 
         assert!(!connection_rx.is_closed());
