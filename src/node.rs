@@ -4,12 +4,9 @@ use iroh::{
     EndpointAddr,
     PublicKey,
     SecretKey,
-    endpoint::{Connection, presets},
     // Use the explicit address lookup types matching version 0.98.2
-    address_lookup::{
-        mdns::MdnsAddressLookup,
-        pkarr::dht::DhtAddressLookup,
-    },
+    address_lookup::{mdns::MdnsAddressLookup, pkarr::dht::DhtAddressLookup},
+    endpoint::{Connection, presets},
 };
 use tokio::sync::mpsc;
 
@@ -17,11 +14,11 @@ use tokio::sync::mpsc;
 /// https://docs.iroh.computer/concepts/discovery.
 #[derive(Default)]
 pub enum N0Discovery {
-    #[default] Full,  // Use the n0.computer relay.
-    DisableRelay,    // Use the n0.computer only for discovery.
-    NoN0,             // Rely on mDNS and/or DHT (which must be enabled in NodeExtraConfig).
+    #[default]
+    Full, // Use the n0.computer relay.
+    DisableRelay, // Use the n0.computer only for discovery.
+    NoN0,         // Rely on mDNS and/or DHT (which must be enabled in NodeExtraConfig).
 }
-
 
 /// Configuration options for initializing a TransportNode.
 /// See https://docs.iroh.computer/concepts/discovery.
@@ -55,13 +52,18 @@ impl TransportNode {
     /// secret_key: The cryptographic identity of the node.
     /// alpn: Application-Layer Protocol Negotiation (ALPN) byte string (e.g.,
     ///   b"secure-p2p-transport/0.1").
-    pub async fn new(secret_key: SecretKey, alpn: Vec<u8>, options: &NodeExtraConfig) -> Result<Self> {
+    pub async fn new(
+        secret_key: SecretKey,
+        alpn: Vec<u8>,
+        options: &NodeExtraConfig,
+    ) -> Result<Self> {
         let builder = match options.n0_discovery {
             N0Discovery::Full => iroh::endpoint::Builder::new(presets::N0),
             N0Discovery::DisableRelay => iroh::endpoint::Builder::new(presets::N0DisableRelay),
             N0Discovery::NoN0 => iroh::endpoint::Builder::new(presets::Minimal),
-        }.secret_key(secret_key.clone())
-         .alpns(vec![alpn.clone()]);
+        }
+        .secret_key(secret_key.clone())
+        .alpns(vec![alpn.clone()]);
         let builder = if options.use_dht {
             builder.address_lookup(DhtAddressLookup::builder().build()?)
         } else {
@@ -73,7 +75,10 @@ impl TransportNode {
             builder
         };
 
-        Ok(Self { endpoint: builder.bind().await?, alpn: alpn })
+        Ok(Self {
+            endpoint: builder.bind().await?,
+            alpn: alpn,
+        })
     }
 
     /// Exposes the node's unique public identity.
@@ -118,8 +123,12 @@ impl TransportNode {
                             if let Some(f) = filter {
                                 let remote_id = connection.remote_id();
                                 if !f(remote_id) {
-                                    tracing::info!("Connection from peer {} rejected by ALPN filter", remote_id);
-                                    let _ = connection.close(0u32.into(), b"Rejected by peer ALPN filter");
+                                    tracing::info!(
+                                        "Connection from peer {} rejected by ALPN filter",
+                                        remote_id
+                                    );
+                                    let _ = connection
+                                        .close(0u32.into(), b"Rejected by peer ALPN filter");
                                     return;
                                 }
                             }
@@ -127,8 +136,14 @@ impl TransportNode {
                             match tx.reserve().await {
                                 Ok(permit) => permit.send(connection),
                                 Err(e) => {
-                                    tracing::debug!("Receiver channel dropped; incoming connection discarded: {}", e);
-                                    let _ = connection.close(0u32.into(), b"Not accepting new connections any more");
+                                    tracing::debug!(
+                                        "Receiver channel dropped; incoming connection discarded: {}",
+                                        e
+                                    );
+                                    let _ = connection.close(
+                                        0u32.into(),
+                                        b"Not accepting new connections any more",
+                                    );
                                 }
                             }
                         }
@@ -152,11 +167,17 @@ mod tests {
     #[tokio::test]
     async fn test_new_and_listen_lifecycle() {
         let secret_key = SecretKey::generate();
-        let node = TransportNode::new(secret_key, b"secure-p2p-transport/test/0.1".to_vec(), &NodeExtraConfig {
-            n0_discovery: N0Discovery::NoN0,
-            use_dht: false,
-            use_mdns: true,
-          }).await.expect("Failed to create node");
+        let node = TransportNode::new(
+            secret_key,
+            b"secure-p2p-transport/test/0.1".to_vec(),
+            &NodeExtraConfig {
+                n0_discovery: N0Discovery::NoN0,
+                use_dht: false,
+                use_mdns: true,
+            },
+        )
+        .await
+        .expect("Failed to create node");
         let connection_rx = node.listen(None);
 
         assert!(!connection_rx.is_closed());

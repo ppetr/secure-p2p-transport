@@ -7,7 +7,11 @@ async fn test_end_to_end_node_transport() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
 
     let alpn_protocol = b"secure-p2p-transport/integration-test/1.0".to_vec();
-    let options = NodeExtraConfig { n0_discovery: N0Discovery::NoN0, use_dht: false, use_mdns: true };
+    let options = NodeExtraConfig {
+        n0_discovery: N0Discovery::NoN0,
+        use_dht: false,
+        use_mdns: true,
+    };
 
     // 1. Spin up Bob (the listener)
     let bob_secret = SecretKey::generate();
