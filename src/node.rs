@@ -107,9 +107,16 @@ impl TransportNode {
         self.endpoint.is_closed()
     }
 
-    /// Spawns an internal background task accepting incoming connections.
-    /// Provides an optional stateless function pointer to filter connections based on the remote peer's public key.
-    pub fn listen(&self, filter: Option<fn(PublicKey) -> bool>) -> mpsc::Receiver<Connection> {
+    /// Spawns an internal background task accepting incoming connections from any peer.
+    pub fn listen_any(&self) -> mpsc::Receiver<Connection> {
+        self.listen_filtered(|_key| -> bool { true })
+    }
+    /// Spawns an internal background task accepting incoming connections from remote peers
+    /// filtered on their public key.
+    pub fn listen_filtered<F>(&self, filter: F) -> mpsc::Receiver<Connection>
+    where
+        F: Fn(PublicKey) -> bool + Send + Copy + 'static,
+    {
         let endpoint = self.endpoint.clone();
         let (tx, rx) = mpsc::channel(32);
 
@@ -120,17 +127,15 @@ impl TransportNode {
                 tokio::spawn(async move {
                     match connecting.await {
                         Ok(connection) => {
-                            if let Some(f) = filter {
-                                let remote_id = connection.remote_id();
-                                if !f(remote_id) {
-                                    tracing::info!(
-                                        "Connection from peer {} rejected by ALPN filter",
-                                        remote_id
-                                    );
-                                    let _ = connection
-                                        .close(0u32.into(), b"Rejected by peer ALPN filter");
-                                    return;
-                                }
+                            let remote_id = connection.remote_id();
+                            if !filter(remote_id) {
+                                tracing::info!(
+                                    "Connection from peer {} rejected by the public key filter",
+                                    remote_id
+                                );
+                                let _ =
+                                    connection.close(0u32.into(), b"Rejected by the public key filter");
+                                return;
                             }
 
                             match tx.reserve().await {
@@ -178,7 +183,7 @@ mod tests {
         )
         .await
         .expect("Failed to create node");
-        let connection_rx = node.listen(None);
+        let connection_rx = node.listen_any();
 
         assert!(!connection_rx.is_closed());
         node.close().await;

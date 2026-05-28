@@ -13,21 +13,24 @@ async fn test_end_to_end_node_transport() -> Result<()> {
         use_mdns: true,
     };
 
-    // 1. Spin up Bob (the listener)
     let bob_secret = SecretKey::generate();
+    let alice_secret = SecretKey::generate();
+
+    // Spin up the nodes.
     let bob_node = TransportNode::new(bob_secret, alpn_protocol.clone(), &options).await?;
     let bob_pubkey = bob_node.public_key();
-    let mut bob_incoming = bob_node.listen(None);
-
-    // 2. Spin up Alice (the connector)
-    let alice_secret = SecretKey::generate();
     let alice_node = TransportNode::new(alice_secret, alpn_protocol, &options).await?;
     let alice_pubkey = alice_node.public_key();
 
-    // 3. Alice attempts to establish connection using only Bob's PublicKey
+    // Bob listens on incoming connections.
+    let mut bob_incoming = bob_node.listen_filtered(move |key| {
+        key == alice_pubkey // Allow only connections from Alice.
+    });
+
+    // Alice attempts to establish connection using only Bob's PublicKey
     let alice_connection = alice_node.connect(bob_pubkey).await?;
 
-    // 4. Accept the incoming connection from Bob's perspective
+    // Accept the incoming connection from Bob's perspective
     let bob_connection = bob_incoming
         .recv()
         .await
@@ -40,7 +43,7 @@ async fn test_end_to_end_node_transport() -> Result<()> {
     let alices_view_of_bob = TransportNode::get_remote_public_key(&alice_connection);
     assert_eq!(alices_view_of_bob, bob_pubkey);
 
-    // 5. Open a bidirectional communication stream from Alice to Bob
+    // Open a bidirectional communication stream from Alice to Bob
     let (mut alice_send, mut alice_recv) = alice_connection.open_bi().await?;
 
     // Alice sends a payload
