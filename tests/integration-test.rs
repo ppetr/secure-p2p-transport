@@ -1,5 +1,6 @@
 use anyhow::Result;
 use iroh::SecretKey;
+use secure_p2p_transport::connection::*;
 use secure_p2p_transport::{N0Discovery, NodeExtraConfig, TransportNode};
 
 #[tokio::test]
@@ -36,11 +37,16 @@ async fn test_end_to_end_node_transport() -> Result<()> {
         .await
         .expect("Bob failed to receive connection");
 
+    // In case `N0Discovery::Full` is enabled above, test that eventually after establishing the
+    // connection, the channel becomes connected directly without a relay
+    // (https://docs.iroh.computer/concepts/nat-traversal).
+    wait_for_direct(&bob_connection).await?;
+
     // Verify the peer identities using the new helper method
-    let bobs_view_of_alice = TransportNode::get_remote_public_key(&bob_connection);
+    let bobs_view_of_alice = get_remote_public_key(&bob_connection);
     assert_eq!(bobs_view_of_alice, alice_pubkey);
 
-    let alices_view_of_bob = TransportNode::get_remote_public_key(&alice_connection);
+    let alices_view_of_bob = get_remote_public_key(&alice_connection);
     assert_eq!(alices_view_of_bob, bob_pubkey);
 
     // Open a bidirectional communication stream from Alice to Bob

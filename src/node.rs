@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 /// See https://docs.rs/iroh/latest/iroh/endpoint/presets/index.html and
 /// https://docs.iroh.computer/concepts/discovery.
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum N0Discovery {
     #[default]
     Full, // Use the n0.computer relay.
@@ -86,11 +86,6 @@ impl TransportNode {
         self.endpoint.secret_key().public()
     }
 
-    /// Extracts the remote peer's public key (Endpoint ID) from an established Iroh connection.
-    pub fn get_remote_public_key(connection: &Connection) -> PublicKey {
-        connection.remote_id()
-    }
-
     /// Asynchronously establishes a connection to a remote peer using only their public key.
     pub async fn connect(&self, peer_id: PublicKey) -> Result<Connection> {
         let endpoint_addr = EndpointAddr::from(peer_id);
@@ -133,8 +128,8 @@ impl TransportNode {
                                     "Connection from peer {} rejected by the public key filter",
                                     remote_id
                                 );
-                                let _ =
-                                    connection.close(0u32.into(), b"Rejected by the public key filter");
+                                let _ = connection
+                                    .close(0u32.into(), b"Rejected by the public key filter");
                                 return;
                             }
 
