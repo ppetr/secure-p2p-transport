@@ -1,5 +1,7 @@
 # Secure P2P transport
 
+*Disclaimer: This is not an official Google product.*
+
 A simple framework to securely connect to peers in a P2P network without
 relying on DNS.
 
