@@ -68,9 +68,10 @@ impl TransportNode {
     ///   b"secure-p2p-transport/0.1").
     pub async fn new(
         secret_key: SecretKey,
-        alpn: Vec<u8>,
+        alpn: impl Into<Vec<u8>>,
         options: &NodeExtraConfig,
     ) -> Result<Self> {
+        let alpn = alpn.into();
         let builder = match options.n0_discovery {
             N0Discovery::Full => iroh::endpoint::Builder::new(presets::N0),
             N0Discovery::DisableRelay => iroh::endpoint::Builder::new(presets::N0DisableRelay),
