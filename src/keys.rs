@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::{anyhow, Context};
 use iroh::{PublicKey, SecretKey};
 use std::io;
 use std::path::Path;
@@ -37,14 +38,20 @@ pub fn load_key_from_disk(path: impl AsRef<Path>) -> io::Result<SecretKey> {
     Ok(SecretKey::from_bytes(&array))
 }
 
-/// Converts a string representation of a public key back to PublicKey.
+/// Converts a string representation of a public key back to PublicKey, whether it's base-32,
+/// hexadecimal or z-base-32.
 pub fn public_key_from_str(s: &str) -> anyhow::Result<PublicKey> {
-    PublicKey::from_str(s).map_err(|e| anyhow::anyhow!(e))
+    PublicKey::from_z32(s).map_err(|e| anyhow!(e)).or_else(|err| PublicKey::from_str(s).context(err))
 }
 
-/// Converts a PublicKey to its string representation.
-pub fn public_key_to_string(key: &PublicKey) -> String {
+/// Converts a PublicKey to its hexadecimal representation.
+pub fn public_key_to_hex(key: &PublicKey) -> String {
     key.to_string()
+}
+
+/// Converts a PublicKey to its hexadecimal representation.
+pub fn public_key_to_z32(key: &PublicKey) -> String {
+    key.to_z32()
 }
 
 #[cfg(test)]
@@ -52,10 +59,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_identity_conversion() {
+    fn test_identity_hex_conversion() {
         let secret = SecretKey::generate();
         let public = secret.public();
-        let public_str = public_key_to_string(&public);
+        let public_str = public_key_to_hex(&public);
+        let parsed_public = public_key_from_str(&public_str).expect("Failed to parse public key");
+        assert_eq!(public, parsed_public);
+    }
+
+    #[test]
+    fn test_identity_z32_conversion() {
+        let secret = SecretKey::generate();
+        let public = secret.public();
+        let public_str = public_key_to_z32(&public);
         let parsed_public = public_key_from_str(&public_str).expect("Failed to parse public key");
         assert_eq!(public, parsed_public);
     }
