@@ -101,6 +101,10 @@ impl TransportNode {
         self.endpoint.secret_key().public()
     }
 
+    pub fn endpoint(&self) -> Endpoint {
+        self.endpoint.clone()
+    }
+
     /// Asynchronously establishes a connection to a remote peer using only their public key.
     pub async fn connect(&self, peer_id: PublicKey) -> Result<Connection> {
         let endpoint_addr = EndpointAddr::from(peer_id);
