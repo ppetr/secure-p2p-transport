@@ -39,6 +39,7 @@ pub enum N0Discovery {
 /// See https://docs.iroh.computer/concepts/discovery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct NodeExtraConfig {
     pub n0_discovery: N0Discovery,
     pub use_mdns: bool,
@@ -223,5 +224,13 @@ mod serde_tests {
         assert_eq!(config.n0_discovery, parsed.n0_discovery);
         assert_eq!(config.use_mdns, parsed.use_mdns);
         assert_eq!(config.use_dht, parsed.use_dht);
+    }
+
+    #[test]
+    fn partial_toml_fills_in_defaults() {
+        let parsed: NodeExtraConfig = toml::from_str("use_mdns = false").unwrap();
+        assert_eq!(parsed.n0_discovery, N0Discovery::default());
+        assert_eq!(parsed.use_mdns, false);
+        assert_eq!(parsed.use_dht, NodeExtraConfig::default().use_dht);
     }
 }
