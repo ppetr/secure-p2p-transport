@@ -58,7 +58,7 @@ pub fn is_relayed(connection: &Connection) -> IsRelayed {
 
 /// Returns an asynchronous stream that receives updates whether `connection` is currently relayed
 /// (for example through n0.computer, see https://docs.iroh.computer/concepts/relays).
-/// This allows callers to wait to wait until NAT traversel
+/// This allows callers to wait until NAT traversal
 /// (https://docs.iroh.computer/concepts/nat-traversal) kicks in before starting communication. Note
 /// that this can also never happen, if NAT traversal fails.
 /// The stream returns `None` iff `connection` isn't connected.
