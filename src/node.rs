@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 /// See https://docs.rs/iroh/latest/iroh/endpoint/presets/index.html and
 /// https://docs.iroh.computer/concepts/discovery.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum N0Discovery {
     #[default]
     Full, // Use the n0.computer relay.
@@ -36,6 +37,8 @@ pub enum N0Discovery {
 
 /// Configuration options for initializing a TransportNode.
 /// See https://docs.iroh.computer/concepts/discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeExtraConfig {
     pub n0_discovery: N0Discovery,
     pub use_mdns: bool,
@@ -201,5 +204,24 @@ mod tests {
 
         assert!(!connection_rx.is_closed());
         node.close().await;
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_toml() {
+        let config = NodeExtraConfig {
+            n0_discovery: N0Discovery::DisableRelay,
+            use_mdns: false,
+            use_dht: true,
+        };
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: NodeExtraConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config.n0_discovery, parsed.n0_discovery);
+        assert_eq!(config.use_mdns, parsed.use_mdns);
+        assert_eq!(config.use_dht, parsed.use_dht);
     }
 }
